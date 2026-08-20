@@ -20,7 +20,7 @@ system-wide.
 Clone the repo on the node:
 
 ```bash
-git clone https://github.com/orenkarmi/resharding_different_proxy_policy.git
+git clone https://github.com/OrenKarmi/resharding_different_proxy_policy.git
 cd resharding_different_proxy_policy
 ```
 

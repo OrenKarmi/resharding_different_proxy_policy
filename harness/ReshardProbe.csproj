@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ReshardProbe</AssemblyName>
+    <RootNamespace>ReshardProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to 2.8.x deliberately: that is what production .NET apps run.
+         v3 is a new major with a rewritten transport, so its reconnect behaviour
+         would not describe the clients we are trying to characterise. -->
+    <PackageReference Include="StackExchange.Redis" Version="2.8.*" />
+    <PackageReference Include="NRedisStack" Version="0.13.*" />
+  </ItemGroup>
+
+</Project>

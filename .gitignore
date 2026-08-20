@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+__pycache__/
+*.pyc
+
+# Test results and collected archives
+results/
+*.tgz
+
+# Local scratch
+/tmp/

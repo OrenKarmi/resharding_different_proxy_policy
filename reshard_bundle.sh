@@ -5,9 +5,9 @@
 # Self-contained. Paste onto a Redis Enterprise node, then:
 #
 #   bash reshard_bundle.sh setup
-#   bash reshard_bundle.sh check    --user admin@rl.org --password 'redislabs'
-#   bash reshard_bundle.sh dryrun   --user admin@rl.org --password 'redislabs'
-#   bash reshard_bundle.sh matrix   --user admin@rl.org --password 'redislabs' \
+#   bash reshard_bundle.sh check    --user "$RL_USER" --password "$RL_PASS"
+#   bash reshard_bundle.sh dryrun   --user "$RL_USER" --password "$RL_PASS"
+#   bash reshard_bundle.sh matrix   --user "$RL_USER" --password "$RL_PASS" \
 #                                   --db-password 'testpass'
 #   bash reshard_bundle.sh collect
 #
@@ -1183,6 +1183,7 @@ import ssl
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.error
 import urllib.request
 
@@ -1211,14 +1212,16 @@ class Rest(object):
             self.ctx.check_hostname = False
             self.ctx.verify_mode = ssl.CERT_NONE
 
-    def _open(self, method, path, body=None):
+    def _open_url(self, method, url, body=None):
         data = json.dumps(body).encode() if body is not None else None
         headers = {"Authorization": self.auth, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(self.base + path, data=data, method=method,
-                                     headers=headers)
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
         return urllib.request.urlopen(req, timeout=self.timeout, context=self.ctx)
+
+    def _open(self, method, path, body=None):
+        return self._open_url(method, self.base + path, body)
 
     def get(self, path):
         try:
@@ -1233,20 +1236,51 @@ class Rest(object):
         except urllib.error.URLError as exc:
             raise SystemExit("REST GET %s failed: %s" % (path, exc.reason))
 
-    def mutate(self, method, path, body=None):
-        try:
-            with self._open(method, path, body) as r:
-                raw = r.read().decode("utf-8", "replace")
-                try:
-                    return True, r.status, (json.loads(raw) if raw.strip() else {})
-                except ValueError:
-                    return True, r.status, raw
-        except urllib.error.HTTPError as exc:
-            return False, exc.code, exc.read().decode("utf-8", "replace")[:500]
-        except urllib.error.URLError as exc:
-            return False, 0, str(exc.reason)
-        except OSError as exc:
-            return False, 0, str(exc)
+    def mutate(self, method, path, body=None, max_redirects=3):
+        """POST/PUT/DELETE, following redirects while preserving method and body.
+
+        Redis Enterprise serves reads from any node but redirects mutations to the
+        cluster master with a 307. urllib follows redirects for GET/HEAD only -
+        HTTPRedirectHandler.redirect_request returns None for other methods - so
+        without this the request fails on every non-master node, and a master
+        change mid-run would break an in-flight matrix.
+        """
+        url = self.base + path
+        cur_method, cur_body = method, body
+        for hop in range(max_redirects + 1):
+            try:
+                with self._open_url(cur_method, url, cur_body) as r:
+                    raw = r.read().decode("utf-8", "replace")
+                    try:
+                        return True, r.status, (json.loads(raw) if raw.strip() else {})
+                    except ValueError:
+                        return True, r.status, raw
+            except urllib.error.HTTPError as exc:
+                loc = exc.headers.get("Location") if exc.headers else None
+                if exc.code in (301, 302, 303, 307, 308) and loc:
+                    if hop >= max_redirects:
+                        return False, exc.code, (
+                            "too many redirects (>%d) for %s %s; last Location: %s"
+                            % (max_redirects, method, path, loc))
+                    target = urllib.parse.urljoin(url, loc)
+                    parts = urllib.parse.urlsplit(target)
+                    new_base = "%s://%s" % (parts.scheme, parts.netloc)
+                    log("REST %s %s -> HTTP %d, following redirect to %s" % (
+                        cur_method, url, exc.code, new_base))
+                    # Remember the master so later mutations go straight there.
+                    if new_base != self.base:
+                        self.base = new_base
+                    if exc.code == 303:
+                        # Per HTTP semantics a 303 becomes a GET without a body.
+                        cur_method, cur_body = "GET", None
+                    url = target
+                    continue
+                return False, exc.code, exc.read().decode("utf-8", "replace")[:500]
+            except urllib.error.URLError as exc:
+                return False, 0, str(exc.reason)
+            except OSError as exc:
+                return False, 0, str(exc)
+        return False, 0, "redirect handling fell through for %s %s" % (method, path)
 
 
 def node_map(rest):

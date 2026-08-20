@@ -1,0 +1,13 @@
+# This repo is cloned onto Linux cluster nodes and the shell scripts are executed
+# there. CRLF would make bash fail with "$'\r': command not found", so force LF
+# for everything textual regardless of the committer's core.autocrlf setting.
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.py     text eol=lf
+*.cs     text eol=lf
+*.csproj text eol=lf
+*.md     text eol=lf
+
+# Never apply text conversion to the self-contained binary.
+prebuilt/ReshardProbe-linux-x64 binary

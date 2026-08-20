@@ -390,6 +390,40 @@ def wait_for_event(path, kind, timeout, proc):
     return False
 
 
+def validate_ordering(outdir):
+    """Warn if the reshard fired before the baseline was established.
+
+    Guaranteed by construction now that stale outputs are cleared, but cheap to
+    assert: an arm with no baseline is unusable, and far better caught here than
+    during analysis days later.
+    """
+    path = os.path.join(outdir, "events.csv")
+    warmup = trigger = None
+    try:
+        with open(path) as fh:
+            fh.readline()  # header
+            for line in fh:
+                parts = line.rstrip().split(",", 4)
+                if len(parts) < 4:
+                    continue
+                t_ms, kind = parts[0], parts[3]
+                detail = parts[4] if len(parts) > 4 else ""
+                if kind == "warmup_complete" and warmup is None:
+                    warmup = float(t_ms)
+                if (kind == "marker" and trigger is None
+                        and detail.lstrip('"').startswith("reshard_trigger")):
+                    trigger = float(t_ms)
+    except Exception as exc:
+        log("could not validate event ordering: %s" % exc)
+        return True
+    if trigger is not None and warmup is not None and trigger <= warmup:
+        log("ERROR: reshard fired at t=%.1fs but the baseline was only ready at "
+            "t=%.1fs. This arm has no baseline and must be re-run."
+            % (trigger / 1000.0, warmup / 1000.0))
+        return False
+    return True
+
+
 def run_arm(rest, args, policy):
     is_control = (policy == CONTROL_ARM)
     db_policy = "single" if is_control else policy
@@ -399,6 +433,18 @@ def run_arm(rest, args, policy):
         os.makedirs(outdir)
     markers = os.path.join(outdir, "markers.txt")
     open(markers, "w").close()
+
+    # Remove outputs from any previous run of this arm. Without this the driver
+    # can match a stale warmup_complete in events.csv during the moment before
+    # the new harness truncates it, and fire the reshard with no baseline.
+    for stale in ("events.csv", "ops.csv", "probe.csv", "reconcile.json",
+                  "meta.json", "harness_stdout.log", "topology.csv",
+                  "proxy_conns.csv", "rladmin_status_pre.txt",
+                  "rladmin_status_post.txt"):
+        try:
+            os.remove(os.path.join(outdir, stale))
+        except OSError:
+            pass
     topo_path = os.path.join(outdir, "topology.csv")
 
     nodes = node_map(rest)
@@ -616,6 +662,9 @@ def run_arm(rest, args, policy):
             log("reconcile totals: %s" % json.dumps(result["reconcile"]))
         else:
             log("WARNING: no reconcile.json produced")
+
+        if not validate_ordering(outdir):
+            result["invalid"] = "reshard preceded baseline"
 
     finally:
         for fh in (topo_fh, pconn_fh):

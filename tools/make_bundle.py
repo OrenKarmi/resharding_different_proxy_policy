@@ -69,6 +69,10 @@ PROLOGUE = r'''#!/bin/bash
 # =============================================================================
 set -u
 
+# Digest of the embedded payloads, stamped in at generation time. Printed by every
+# subcommand so "is this actually the fixed code?" is never a guess.
+BUNDLE_VERSION="@@BUNDLE_VERSION@@"
+
 WORKDIR="${RESHARD_WORKDIR:-$HOME/reshard_probe}"
 DOTNET_DIR="$HOME/.dotnet"
 DOTNET="$DOTNET_DIR/dotnet"
@@ -97,6 +101,7 @@ extract() {
 }
 
 cmd_setup() {
+  info "bundle version $BUNDLE_VERSION"
   extract
 
   if [ ! -x "$DOTNET" ]; then
@@ -140,6 +145,7 @@ need_built() {
 }
 
 run_driver() {
+  info "bundle version $BUNDLE_VERSION"
   need_built
   local sub="$1"; shift
   export DOTNET_ROOT="$DOTNET_DIR"
@@ -174,7 +180,7 @@ cmd_collect() {
 usage() {
   sed -n '2,45p' "$0"
   echo
-  echo "Subcommands: setup | check | dryrun | arm --policy <p> | matrix | collect"
+  echo "Subcommands: setup | check | dryrun | arm --policy <p> | matrix | collect | version"
   exit 1
 }
 
@@ -182,6 +188,7 @@ usage() {
 SUB="$1"; shift || true
 
 case "$SUB" in
+  version) echo "$BUNDLE_VERSION" ;;
   setup)   cmd_setup ;;
   collect) cmd_collect ;;
   check|dryrun|arm|matrix) run_driver "$SUB" "$@" ;;
@@ -214,16 +221,27 @@ def main():
 
     writer = emit_payload_writer(PAYLOADS)
 
+    import hashlib
+    h = hashlib.sha256()
+    for rel, path in PAYLOADS:
+        with open(path, "rb") as fh:
+            h.update(rel.encode())
+            h.update(fh.read())
+    version = h.hexdigest()[:12]
+
     anchor = 'die() { echo "ERROR: $*" >&2; exit 1; }'
     if anchor not in PROLOGUE:
         raise SystemExit("prologue anchor not found")
     out = PROLOGUE.replace(anchor, anchor + "\n\n" + writer, 1)
+
+    out = out.replace("@@BUNDLE_VERSION@@", version)
 
     dest = os.path.join(ROOT, "reshard_bundle.sh")
     with open(dest, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(out)
 
     print("wrote %s" % dest)
+    print("  version %s" % version)
     print("  %d bytes, %d lines" % (os.path.getsize(dest), out.count("\n") + 1))
     for rel, path in PAYLOADS:
         print("  embedded %-34s %6d bytes" % (rel, os.path.getsize(path)))

@@ -39,6 +39,10 @@
 # =============================================================================
 set -u
 
+# Digest of the embedded payloads, stamped in at generation time. Printed by every
+# subcommand so "is this actually the fixed code?" is never a guess.
+BUNDLE_VERSION="eb26f19b9584"
+
 WORKDIR="${RESHARD_WORKDIR:-$HOME/reshard_probe}"
 DOTNET_DIR="$HOME/.dotnet"
 DOTNET="$DOTNET_DIR/dotnet"
@@ -1947,6 +1951,7 @@ extract() {
 }
 
 cmd_setup() {
+  info "bundle version $BUNDLE_VERSION"
   extract
 
   if [ ! -x "$DOTNET" ]; then
@@ -1990,6 +1995,7 @@ need_built() {
 }
 
 run_driver() {
+  info "bundle version $BUNDLE_VERSION"
   need_built
   local sub="$1"; shift
   export DOTNET_ROOT="$DOTNET_DIR"
@@ -2024,7 +2030,7 @@ cmd_collect() {
 usage() {
   sed -n '2,45p' "$0"
   echo
-  echo "Subcommands: setup | check | dryrun | arm --policy <p> | matrix | collect"
+  echo "Subcommands: setup | check | dryrun | arm --policy <p> | matrix | collect | version"
   exit 1
 }
 
@@ -2032,6 +2038,7 @@ usage() {
 SUB="$1"; shift || true
 
 case "$SUB" in
+  version) echo "$BUNDLE_VERSION" ;;
   setup)   cmd_setup ;;
   collect) cmd_collect ;;
   check|dryrun|arm|matrix) run_driver "$SUB" "$@" ;;

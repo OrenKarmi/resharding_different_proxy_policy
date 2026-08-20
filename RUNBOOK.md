@@ -37,6 +37,35 @@ ENDOFBUNDLE
 bash -n reshard_bundle.sh      # expect no output
 ```
 
+## Confirming you are running the current code
+
+Every subcommand prints a version stamp derived from the embedded sources:
+
+```
+[bundle] bundle version eb26f19b9584
+```
+
+`bash reshard_bundle.sh version` prints it alone. If a fix does not seem to have taken
+effect, compare this against what `python tools/make_bundle.py` reports for the commit
+you expect. A mismatch means the node is running older code.
+
+**`git pull` can silently fail to update you.** If the working copy of
+`reshard_bundle.sh` was modified locally, pull aborts with *"Your local changes would be
+overwritten by merge"* and nothing changes, while `setup` still succeeds using the old
+file. Recover with:
+
+```bash
+git checkout -- reshard_bundle.sh   # discard local changes
+git pull
+bash reshard_bundle.sh version      # confirm it moved
+```
+
+Or, to force the working tree to match the remote exactly:
+
+```bash
+git fetch origin && git reset --hard origin/main
+```
+
 ## Step 2 - build
 
 ```bash

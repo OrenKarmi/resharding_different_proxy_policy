@@ -97,6 +97,23 @@ characters ``, producing `sed: unterminated 's' command` on every run; and the 
 staleness check compared mtimes, which `extract()` always bumps, so it warned on every
 clean run. It now compares a digest of the sources against one recorded at build time.
 
+## Why the fix appeared to fail twice (2026-08-20)
+
+The same 307 was reported three times. Only the first was a code bug; the other two were
+the fix not reaching the running code, which was invisible from the output.
+
+- **Attempt 2**: `run_driver` executed the `node_driver.py` extracted by an earlier
+  `setup`, so cloning the fix changed nothing. Fixed by re-extracting every run.
+- **Attempt 3**: `git pull` aborted with *"Your local changes to reshard_bundle.sh would
+  be overwritten by merge"*, so the node stayed on the original commit - yet `setup`
+  succeeded and looked healthy, and the failure was byte-identical.
+
+Both are the same class of problem: no way to tell which code was running. Every
+subcommand now prints a `bundle version <digest>` derived from the embedded payloads,
+and `reshard_bundle.sh version` prints it alone. The tell for attempt 3 in hindsight was
+the *absence* of the `API master is ...` line that the fixed code emits before mutating -
+absence of expected output is weaker evidence than a positive version stamp.
+
 ## A wrong hypothesis worth recording
 
 When the first run against a live Redis failed completely, the suspicion was that

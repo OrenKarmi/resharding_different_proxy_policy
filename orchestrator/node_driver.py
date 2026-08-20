@@ -35,6 +35,11 @@ import urllib.request
 # proxy_policy variable under test.
 DEFAULT_REGEX_RULES = [{"regex": ".*\\{(?<tag>.*)\\}.*"}, {"regex": "(?<tag>.*)"}]
 
+# Redis Enterprise rejects anything else with HTTP 400 invalid_schema. Notably
+# underscores are NOT allowed, so a database name cannot be derived from the
+# underscored directory tag.
+DB_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")
+
 POLICIES = ["single", "all-master-shards", "all-nodes"]
 CONTROL_ARM = "control"
 
@@ -231,6 +236,10 @@ def describe(topo, nodes):
 
 
 def create_db(rest, name, policy, memory_size, db_password):
+    if not DB_NAME_RE.match(name):
+        raise SystemExit(
+            "database name %r is invalid: must match %s (no underscores)"
+            % (name, DB_NAME_RE.pattern))
     body = {"name": name, "type": "redis", "memory_size": memory_size,
             "shards_count": 1, "replication": True, "shards_placement": "dense",
             "proxy_policy": policy}
@@ -394,7 +403,9 @@ def run_arm(rest, args, policy):
 
     nodes = node_map(rest)
     me = local_node_uid(rest)
-    db_name = "%s-%s" % (args.db_prefix, tag)
+    # tag (underscored) names the output directory; the database name must use the
+    # hyphenated policy because RE forbids underscores.
+    db_name = "%s-%s" % (args.db_prefix, policy)
 
     log("creating db %s (proxy_policy=%s)" % (db_name, db_policy))
     uid = create_db(rest, db_name, db_policy, args.memory_size, args.db_password)

@@ -83,9 +83,40 @@ superseded/
 docs/PLAN.md           original plan and decision record
 ```
 
+## First results (2026-08-20, RE 8.0.10, 5-node cluster)
+
+`control` and `single` completed; `all-master-shards` and `all-nodes` failed on a
+database-naming bug (now fixed) and need re-running.
+
+**Under `single`, resharding 1 -> 2 caused no measurable client impact.**
+
+| arm | attempted | acked | ambiguous | phantom | lost | reshard |
+|---|---|---|---|---|---|---|
+| control | 36425 | 36425 | 0 | 0 | 0 | - |
+| single | 39688 | 39688 | 0 | 0 | 0 | 13.5 s |
+
+The reason is visible in the topology: both new masters moved to node3, but **the
+endpoint stayed on node1**.
+
+```
+masters : node3, node3
+replicas: node1, node2
+endpoint: addrs=['172.16.22.11']   (node1, unchanged)
+```
+
+So event B (endpoint re-bind) never happened. The proxy on node1 kept serving and simply
+forwarded to shards on node3, at the cost of an extra network hop. This **falsifies** the
+hypothesis that `single` produces an outage cliff on reshard: with this policy the
+endpoint does not follow the master shards, so connections survive.
+
+It also means resharding alone does not reproduce "the endpoint migrated to node 3".
+Whatever moved the endpoint in the original observation was something else - an explicit
+`rladmin bind`, a node failure, or a later rebalance - and measuring endpoint migration
+needs that step performed deliberately.
+
 ## Status
 
-Built and validated end-to-end. **Not yet run against the cluster.**
+Harness validated end-to-end; two of four arms run against the cluster.
 
 Validated against real Redis 7.0.15 with an injected `CLIENT PAUSE` fault:
 
@@ -112,6 +143,9 @@ tails that file for `warmup_complete`; and the Linux apphost needing `DOTNET_ROO
 - Running on a cluster node keeps real cluster DNS and a real cross-node hop, but
   absolute latency is lower than a real remote app would see. The *comparison between
   policies* is unaffected.
+- **Database names cannot contain underscores** (`^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$`).
+  The name is built from the hyphenated policy, while the underscored tag names only the
+  output directory. `create_db` validates up front so the error names the cause.
 - **Flex-shard / ASM databases**: scale-out completion is `is_balanced` in CCS, which
   REST cannot see. `node_driver.py` reads it via `ccs-cli` when `oss_sharding` is true.
   If that fails it warns and falls back to shard count, which can stop measuring early

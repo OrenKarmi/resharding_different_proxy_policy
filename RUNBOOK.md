@@ -200,7 +200,7 @@ rladmin status databases | grep reshardtest
 | `--warmup` / `--tail` | 60 / 120 s | longer tail if recovery looks incomplete |
 | `--config-check-sec` | 60 | SE.Redis topology-refresh interval; likely the biggest client-side lever on recovery time. Worth a follow-up arm at 5. |
 | `--keep-db` | off | leave the DB in place to inspect after a failure |
-| `--allow-colocated` | off | run anyway on a node hosting the test DB (degrades latency numbers) |
+| `--allow-colocated` | off | run anyway on a node holding a shard of the test DB (degrades latency numbers) |
 | `--rest-host` | localhost | aim REST at a specific node, e.g. the cluster master. Orchestration only; never affects the data path. |
 | `--no-proxy-conns` | off | skip `bdb-cli` sampling; loses the clearest endpoint-migration evidence |
 

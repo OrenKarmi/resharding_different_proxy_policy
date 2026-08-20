@@ -41,7 +41,7 @@ set -u
 
 # Digest of the embedded payloads, stamped in at generation time. Printed by every
 # subcommand so "is this actually the fixed code?" is never a guess.
-BUNDLE_VERSION="ff22950823a9"
+BUNDLE_VERSION="a4d04d3257c5"
 
 WORKDIR="${RESHARD_WORKDIR:-$HOME/reshard_probe}"
 DOTNET_DIR="$HOME/.dotnet"
@@ -1588,17 +1588,33 @@ def run_arm(rest, args, policy):
                 "is_balanced in CCS and not visible over REST, so completion may "
                 "be detected early and impact under-reported.")
 
-        # The load generator must not compete for CPU with the shard and proxy
-        # being measured.
+        # Only shards are a blocking problem: the load generator would compete for
+        # CPU with the very shard being measured. A local *proxy* is not - under
+        # all-nodes there is one on every node by definition, and under
+        # all-master-shards there may be, so refusing on that basis would make
+        # those policies untestable. Warn instead.
         if me is not None:
-            if me in pre["master_nodes"] or nodes.get(me) in pre["endpoint_addrs"]:
-                msg = "node%d hosts the test DB master and/or endpoint" % me
+            shard_nodes = set(pre["master_nodes"]) | set(pre["replica_nodes"])
+            on_shard = me in shard_nodes
+            on_endpoint = nodes.get(me) in pre["endpoint_addrs"]
+
+            if on_shard:
+                role = "master" if me in pre["master_nodes"] else "replica"
+                msg = ("node%d hosts a %s shard of the test DB, so the load "
+                       "generator would compete with it for CPU" % (me, role))
                 if not args.allow_colocated:
-                    raise SystemExit("REFUSING: %s. Run on a different node or pass "
-                                     "--allow-colocated." % msg)
+                    raise SystemExit("REFUSING: %s. Run on a node with no shards of "
+                                     "this database, or pass --allow-colocated."
+                                     % msg)
                 log("WARNING: %s (proceeding due to --allow-colocated)" % msg)
+            elif on_endpoint:
+                log("client node = node%d: no shards here, but the endpoint is also "
+                    "advertised on this node (expected under %s), so the client may "
+                    "connect to the local proxy - see proxy_conns.csv for which "
+                    "proxy actually served it" % (me, db_policy))
             else:
-                log("client node = node%d, not hosting the test DB - good" % me)
+                log("client node = node%d, hosting neither shards nor the endpoint "
+                    "of the test DB - ideal" % me)
         else:
             log("WARNING: could not identify this node; skipping co-location check")
 

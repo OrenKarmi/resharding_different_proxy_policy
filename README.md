@@ -137,9 +137,16 @@ tails that file for `warmup_complete`; and the Linux apphost needing `DOTNET_ROO
 
 ## Known caveats
 
-- **Run on a node that does not host the test database.** The load generator would
-  otherwise compete for CPU with the shard and proxy being measured. `node_driver.py`
-  detects this and refuses; `--allow-colocated` overrides.
+- **Run on a node that hosts no shards of the test database.** The load generator would
+  otherwise compete for CPU with the shard being measured. `node_driver.py` refuses if
+  the local node holds a master *or replica* shard; `--allow-colocated` overrides.
+  A local *proxy* only warns, because under `all-nodes` every node has one by definition
+  and refusing would make the policy untestable.
+- **Under `all-nodes` the client may connect to the local proxy.** The endpoint resolves
+  to every node, so the client can end up served by the proxy on the machine it runs on,
+  which a reshard elsewhere would never disturb. Check `proxy_conns.csv` for which proxy
+  address actually served our connections before reading "no impact" as a property of
+  the policy.
 - Running on a cluster node keeps real cluster DNS and a real cross-node hop, but
   absolute latency is lower than a real remote app would see. The *comparison between
   policies* is unaffected.

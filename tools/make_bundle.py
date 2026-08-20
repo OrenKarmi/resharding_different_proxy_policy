@@ -78,6 +78,13 @@ RESULTS="${RESHARD_RESULTS:-$WORKDIR/results}"
 die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "[bundle] $*"; }
 
+# Digest of the C# sources, so we can tell whether the built harness matches
+# them. mtime is useless here: extract() rewrites the files on every run.
+sources_digest() {
+  cat "$WORKDIR"/ReshardProbe/*.csproj "$WORKDIR"/ReshardProbe/*.cs 2>/dev/null |
+    { md5sum 2>/dev/null || cksum; } | awk '{print $1}'
+}
+
 extract() {
   info "extracting sources to $WORKDIR"
   mkdir -p "$WORKDIR/ReshardProbe" || die "cannot create $WORKDIR"
@@ -121,6 +128,7 @@ cmd_setup() {
     || die "build failed (no outbound HTTPS to nuget.org?)"
 
   [ -f "$DLL" ] || die "expected $DLL after build"
+  sources_digest > "$WORKDIR/.build_digest"
   info "OK. Harness built at $DLL"
   info "Next: bash $0 check --user <u> --password <p>"
 }
@@ -135,8 +143,22 @@ run_driver() {
   need_built
   local sub="$1"; shift
   export DOTNET_ROOT="$DOTNET_DIR"
-  python3 "$WORKDIR/node_driver.py" "$sub" \
-    --dotnet "$DOTNET" --probe-dll "$DLL" --outdir "$RESULTS" "$@"
+
+  # Re-extract on every run. Otherwise a newer bundle still executes the
+  # node_driver.py left behind by a previous 'setup', silently running stale
+  # code - which is exactly how an already-fixed bug appeared to persist.
+  extract
+
+  # Only 'setup' compiles the C# sources, so warn if what is on disk no longer
+  # matches what the harness was built from.
+  if [ -f "$WORKDIR/.build_digest" ]; then
+    if [ "$(sources_digest)" != "$(cat "$WORKDIR/.build_digest")" ]; then
+      echo "[bundle] WARNING: C# sources differ from the built harness." >&2
+      echo "[bundle]          Run: bash $0 setup   to rebuild before measuring." >&2
+    fi
+  fi
+
+  python3 "$WORKDIR/node_driver.py" "$sub" --dotnet "$DOTNET" --probe-dll "$DLL" --outdir "$RESULTS" "$@"
 }
 
 cmd_collect() {

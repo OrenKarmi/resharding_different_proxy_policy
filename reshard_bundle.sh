@@ -1283,6 +1283,45 @@ class Rest(object):
         return False, 0, "redirect handling fell through for %s %s" % (method, path)
 
 
+ROLE_ROW_RE = re.compile(
+    r"^\*?node:(\d+)\s+(\S+)\s+(\d+\.\d+\.\d+\.\d+)", re.MULTILINE)
+
+
+def find_api_master(rest):
+    """Address of the node that accepts REST mutations, i.e. the cluster master.
+
+    Redis Enterprise serves reads from any node but 307s mutations to the master.
+    Resolving it up front makes the intent explicit in the logs and avoids relying
+    on redirect handling. Redirect following stays as a backstop for a master
+    change mid-run.
+
+    Returns (address, how) or (None, reason).
+    """
+    # Preferred: the API itself, which also works when run off-box.
+    try:
+        for n in rest.get("/v1/nodes"):
+            for key in ("role", "node_role", "cluster_role"):
+                if str(n.get(key, "")).lower() == "master":
+                    addr = n.get("addr") or n.get("external_addr")
+                    if addr:
+                        return addr, "REST /v1/nodes %s field" % key
+    # Rest.get raises SystemExit, which is NOT an Exception subclass, so catching
+    # only Exception here would abort the run instead of falling back to rladmin.
+    except (Exception, SystemExit) as exc:
+        log("master discovery via REST failed (%s); trying rladmin" % exc)
+
+    # Fallback: rladmin, available because we run on a node. Use the ROLE column,
+    # NOT the leading '*' - that marks the local node, not the master.
+    ok, out = _run("rladmin status nodes", timeout=60)
+    if ok:
+        for uid, role, addr in ROLE_ROW_RE.findall(out):
+            if role.lower() == "master":
+                return addr, "rladmin status nodes (node%s)" % uid
+        return None, "rladmin ran but no node had ROLE=master"
+
+    return None, "neither REST nor rladmin could identify the master"
+
+
 def node_map(rest):
     return dict((int(n["uid"]), n.get("addr") or n.get("external_addr") or "?")
                 for n in rest.get("/v1/nodes"))
@@ -1811,6 +1850,9 @@ def main():
 
     p.add_argument("--rest-host", default="localhost")
     p.add_argument("--rest-port", type=int, default=9443)
+    p.add_argument("--no-master-discovery", action="store_true",
+                   help="do not look up the cluster master first; rely only on "
+                        "following 307 redirects")
     p.add_argument("--user", default=os.environ.get("RL_REST_USER"))
     p.add_argument("--password", default=os.environ.get("RL_REST_PASSWORD"))
 
@@ -1858,6 +1900,23 @@ def main():
         os.makedirs(args.outdir)
 
     rest = Rest(args.rest_host, args.rest_port, args.user, args.password)
+
+    # Point mutations at the cluster master up front. Harmless for read-only
+    # commands, and it makes the target explicit rather than implicit in a redirect.
+    if not args.no_master_discovery:
+        addr, how = find_api_master(rest)
+        if addr:
+            new_base = "https://%s:%d" % (addr, args.rest_port)
+            if new_base != rest.base:
+                log("API master is %s (via %s); directing REST there (was %s)" % (
+                    addr, how, rest.base))
+                rest.base = new_base
+            else:
+                log("API master is %s (via %s); already targeting it" % (addr, how))
+        else:
+            log("could not determine the API master (%s); relying on 307 "
+                "redirect following" % how)
+
     return {"check": cmd_check, "dryrun": cmd_dryrun, "arm": cmd_arm,
             "matrix": cmd_matrix}[args.command](rest, args)
 
@@ -1868,6 +1927,13 @@ RESHARD_EOF_NODE_DRIVER_PY
 }
 
 info() { echo "[bundle] $*"; }
+
+# Digest of the C# sources, so we can tell whether the built harness matches
+# them. mtime is useless here: extract() rewrites the files on every run.
+sources_digest() {
+  cat "$WORKDIR"/ReshardProbe/*.csproj "$WORKDIR"/ReshardProbe/*.cs 2>/dev/null |
+    { md5sum 2>/dev/null || cksum; } | awk '{print $1}'
+}
 
 extract() {
   info "extracting sources to $WORKDIR"
@@ -1912,6 +1978,7 @@ cmd_setup() {
     || die "build failed (no outbound HTTPS to nuget.org?)"
 
   [ -f "$DLL" ] || die "expected $DLL after build"
+  sources_digest > "$WORKDIR/.build_digest"
   info "OK. Harness built at $DLL"
   info "Next: bash $0 check --user <u> --password <p>"
 }
@@ -1926,8 +1993,22 @@ run_driver() {
   need_built
   local sub="$1"; shift
   export DOTNET_ROOT="$DOTNET_DIR"
-  python3 "$WORKDIR/node_driver.py" "$sub" \
-    --dotnet "$DOTNET" --probe-dll "$DLL" --outdir "$RESULTS" "$@"
+
+  # Re-extract on every run. Otherwise a newer bundle still executes the
+  # node_driver.py left behind by a previous 'setup', silently running stale
+  # code - which is exactly how an already-fixed bug appeared to persist.
+  extract
+
+  # Only 'setup' compiles the C# sources, so warn if what is on disk no longer
+  # matches what the harness was built from.
+  if [ -f "$WORKDIR/.build_digest" ]; then
+    if [ "$(sources_digest)" != "$(cat "$WORKDIR/.build_digest")" ]; then
+      echo "[bundle] WARNING: C# sources differ from the built harness." >&2
+      echo "[bundle]          Run: bash $0 setup   to rebuild before measuring." >&2
+    fi
+  fi
+
+  python3 "$WORKDIR/node_driver.py" "$sub" --dotnet "$DOTNET" --probe-dll "$DLL" --outdir "$RESULTS" "$@"
 }
 
 cmd_collect() {

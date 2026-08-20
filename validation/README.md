@@ -78,6 +78,25 @@ replies without draining the request body makes the client's next write reset th
 connection (masking the hop cap), and the original hop-cap path returned a bare 307 with
 an empty body instead of a diagnosable message.
 
+## Three bugs found while fixing the 307 (2026-08-20)
+
+Reported as "the master moved to node 5, the fix did not work". Two of those premises
+were wrong and one uncovered real defects.
+
+1. **The master had not moved.** `rladmin status nodes` showed `ROLE=master` on node 1;
+   the `*` beside node 5 marks the *local* node. The 307 target was correct all along.
+2. **The bundle ran stale code.** `run_driver` executed the `node_driver.py` that a
+   previous `setup` had extracted into `$WORKDIR`, so a cloned fix had no effect. It now
+   re-extracts on every invocation. This is why a fixed bug appeared to persist.
+3. **`SystemExit` escaped master discovery.** `Rest.get` raises `SystemExit`, which does
+   not subclass `Exception`, so `except Exception` did not catch it and a REST failure
+   aborted the run instead of falling back to `rladmin`.
+
+Also fixed along the way: a literal CR byte got into the generator instead of the two
+characters ``, producing `sed: unterminated 's' command` on every run; and the first
+staleness check compared mtimes, which `extract()` always bumps, so it warned on every
+clean run. It now compares a digest of the sources against one recorded at build time.
+
 ## A wrong hypothesis worth recording
 
 When the first run against a live Redis failed completely, the suspicion was that

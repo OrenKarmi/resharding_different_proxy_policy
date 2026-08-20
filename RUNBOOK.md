@@ -76,9 +76,18 @@ Read-only; creates nothing.
 
 Redis Enterprise serves REST **reads** from any node but only accepts **mutations**
 (creating/resharding/deleting a database) on the cluster master, answering `307`
-elsewhere. The orchestrator now follows that redirect automatically, preserving the
-method and body, and remembers the master for subsequent calls - so you can run from
-any node, and a master failover mid-matrix costs one redirect rather than a failed run.
+elsewhere. The orchestrator handles this in two layers:
+
+1. **Up front** it looks up the master and aims REST at it, via the `role` field in
+   `/v1/nodes`, falling back to the `ROLE` column of `rladmin status nodes`. You will
+   see a line like `API master is 172.16.x.x (via ...); directing REST there`.
+2. **As a backstop** it follows a `307` if the master moves mid-run, preserving the
+   method and body.
+
+Note when reading `rladmin status nodes` yourself: the authoritative column is `ROLE`.
+The leading `*` marks the node you are logged into, **not** the master.
+
+Disable step 1 with `--no-master-discovery` if you want to test the redirect path.
 
 You will see a line like this in the output, which is expected and harmless:
 
@@ -86,8 +95,8 @@ You will see a line like this in the output, which is expected and harmless:
 REST POST https://<node-ip>:9443/v1/bdbs -> HTTP 307, following redirect to https://<master-ip>:9443
 ```
 
-If you would rather aim at the master directly, `--rest-host <master-ip>` still works.
-It only affects REST orchestration and never the measured data path.
+`--rest-host <ip>` still works if you want to pin it manually. It only affects REST
+orchestration and never the measured data path.
 
 ## Step 4 - dry run
 

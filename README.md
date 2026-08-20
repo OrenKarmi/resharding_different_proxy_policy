@@ -121,11 +121,12 @@ tails that file for `warmup_complete`; and the Linux apphost needing `DOTNET_ROO
 - The 1 -> 2 reshard also flips `sharding: true` and installs `shard_key_regex`, so
   "enable sharding" and "add a shard" happen together. That is the realistic customer
   path; a pure 2 -> 4 arm would separate them.
-- **REST mutations are master-only.** Redis Enterprise redirects create/reshard/delete
-  to the cluster master with a `307`; reads are served anywhere. Python's urllib refuses
-  to follow redirects for non-GET methods, so this had to be handled explicitly. The
-  orchestrators now follow it, preserving method and body, and cache the master's origin.
-  Covered by `validation/test_redirect.py`.
+- **REST mutations are master-only.** The orchestrator resolves the master up front
+  (`/v1/nodes` `role`, else the `ROLE` column of `rladmin status nodes`) and still
+  follows a `307` as a backstop if it moves mid-run. When reading `rladmin` output
+  note that the leading `*` marks the local node, not the master. Python's urllib refuses to follow redirects for
+  non-GET methods, so this had to be handled explicitly. Covered by
+  `validation/test_redirect.py`.
 - The cluster was not reachable from the Windows workstation during development
   (the lab DNS zone was absent from the VPN's resource list, and there was no route to
   the lab subnet), which is why everything runs from a node.
